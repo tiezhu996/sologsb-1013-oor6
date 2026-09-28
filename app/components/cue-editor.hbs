@@ -19,6 +19,31 @@
     </div>
   </header>
 
+  <section class="caller-bar paper-surface">
+    <div class="caller-id">
+      <small>当前跟场人 · ON CALL</small>
+      <div class="caller-edit">
+        <span class="caller-badge">🎧</span>
+        <PaperInput @label="输入姓名（换班时交接）" @value={{this.show.caller}} @onChange={{this.updateCaller}} />
+      </div>
+    </div>
+    {{#if this.activeSceneProgress}}
+      <div class="caller-progress">
+        <small>{{this.activeScene.act}} {{this.activeScene.name}}「{{this.activeScene.title}}」跟场进度</small>
+        <div class="progress-track">
+          <div class="progress-done" style={{this.progressBarStyle}}></div>
+        </div>
+        <span class="progress-copy">
+          已完成 <strong>{{this.activeSceneProgress.done}}</strong>/{{this.activeSceneProgress.total}}
+          {{#if this.activeSceneProgress.active}}· 进行中 <strong>{{this.activeSceneProgress.active}}</strong>{{/if}}
+        </span>
+      </div>
+    {{/if}}
+    <div class="caller-hint">
+      提示顺序执行：前一条<strong>完成签核</strong>后才能开始下一条；签核记录随提示离线保存。
+    </div>
+  </section>
+
   <section class="show-strip">
     <PaperInput @label="演出名称" @value={{this.show.title}} @onChange={{this.updateShowTitle}} class="show-title-input" />
     <div class="show-stats">
@@ -42,7 +67,7 @@
           <button type="button" class="scene-item {{if scene.active "is-active"}}" {{on "click" (fn this.selectScene scene.id)}}>
             <span class="act-name">{{scene.act}}</span>
             <strong>{{scene.name}} · {{scene.title}}</strong>
-            <small>{{scene.startTime}} · {{scene.cues.length}} 条 · {{scene.issueCount}} 项检查</small>
+            <small>{{scene.startTime}} · {{scene.cues.length}} 条 · 已签 {{scene.doneCount}} · {{scene.issueCount}} 项检查</small>
           </button>
         {{else}}
           <p class="empty-copy">未找到场次</p>
@@ -78,16 +103,16 @@
 
         <div class="timeline paper-surface">
           <div class="timeline-head">
-            <div><small>PROMPT SEQUENCE</small><h2>提示顺序与时间</h2></div>
-            <div class="keyboard-note">拖动排序 · <kbd>Alt</kbd> + <kbd>↑↓</kbd> 调整 · <kbd>N</kbd> 新建</div>
+            <div><small>PROMPT SEQUENCE</small><h2>提示顺序与签核</h2></div>
+            <div class="keyboard-note">点击状态切换 · 拖动排序 · <kbd>Alt</kbd> + <kbd>↑↓</kbd> 调整 · <kbd>N</kbd> 新建</div>
           </div>
           <div class="timeline-labels">
-            <span>时间</span><span>类型 / 提示内容</span><span>时长</span><span>负责人</span>
+            <span>时间</span><span>类型 / 提示内容</span><span>时长</span><span>签核状态</span>
           </div>
           <div class="cue-list">
             {{#each this.cueRows as |cue|}}
               <article
-                class="cue-row kind-{{cue.kindClass}} {{if cue.selected "is-selected"}}"
+                class="cue-row kind-{{cue.kindClass}} status-{{cue.status}} {{if cue.selected "is-selected"}} {{if cue.blocked "is-blocked"}}"
                 draggable="true"
                 {{on "dragstart" (fn this.startDrag cue.id)}}
                 {{on "dragover" this.allowDrop}}
@@ -104,6 +129,7 @@
                     <span class="cue-index">{{cue.index}}</span>
                     <span class="cue-kind">{{cue.kind}}</span>
                     <h3>{{cue.title}}</h3>
+                    <span class="status-chip status-chip-{{cue.status}}">{{cue.statusLabel}}</span>
                     {{#if cue.hasIssue}}<span class="issue-flag">检查</span>{{/if}}
                   </div>
                   <p>
@@ -112,11 +138,27 @@
                     {{#if cue.props.length}}道具：{{join ", " cue.props}}{{/if}}
                     {{#if cue.cast.length}}演员：{{join ", " cue.cast}}{{/if}}
                   </p>
+                  {{#if cue.doneAt}}
+                    <small class="signoff-line">✓ {{cue.doneOperator}} 于 {{cue.doneAt}} 完成签核</small>
+                  {{else if cue.startedAt}}
+                    <small class="signoff-line signoff-active">● {{cue.startOperator}} 于 {{cue.startedAt}} 开始执行</small>
+                  {{else if cue.blocked}}
+                    <small class="signoff-line signoff-blocked">前一条完成签核后方可开始</small>
+                  {{/if}}
                 </div>
                 <div class="cue-duration">{{cue.duration}}<small>秒</small></div>
-                <div class="cue-owner">
-                  <strong>{{if cue.owner cue.owner "待指定"}}</strong>
-                  <small>{{if cue.dependsOn.length (concat cue.dependsOn.length " 个前置") "无前置依赖"}}</small>
+                <div class="cue-signoff">
+                  <button
+                    type="button"
+                    class="signoff-toggle signoff-{{cue.status}}"
+                    title={{if this.activeScene.locked "本场已锁定，签核记录不可修改" (if cue.blocked "前一条完成签核后方可开始" "点击切换签核状态")}}
+                    disabled={{this.activeScene.locked}}
+                    {{on "click" (fn this.quickCueAction cue.id)}}
+                  >
+                    {{#if (eq cue.status "done")}}✓{{else if (eq cue.status "active")}}●{{else if cue.blocked}}🔒{{else}}○{{/if}}
+                    <span>{{cue.statusLabel}}</span>
+                  </button>
+                  <small>{{cue.owner}}</small>
                 </div>
               </article>
             {{else}}
@@ -161,6 +203,50 @@
           <div class="selected-cue">
             <span class="selected-kind">{{this.selectedCue.kind}}</span>
             <h3>{{this.selectedCue.title}}</h3>
+
+            <div class="signoff-panel">
+              <small class="signoff-title">签核状态（操作人：{{this.callerName}}）</small>
+              <div class="signoff-switch">
+                {{#each this.signoffOptions as |option|}}
+                  <button
+                    type="button"
+                    class="signoff-option signoff-option-{{option.status}} {{if (eq option.status this.selectedStatus) "is-current"}}"
+                    disabled={{this.activeScene.locked}}
+                    {{on "click" (fn this.setCueStatus this.selectedCue.id option.status)}}
+                  >{{option.label}}</button>
+                {{/each}}
+              </div>
+              {{#if this.activeScene.locked}}
+                <p class="signoff-note">本场已锁定，签核记录不可修改；如需变更请先建立修订。</p>
+              {{else if this.selectedStartBlocked}}
+                <p class="signoff-note">同一场内前一条完成签核后，才能开始本条。</p>
+              {{/if}}
+              <dl class="signoff-meta">
+                <dt>开始执行</dt>
+                <dd>
+                  {{#if this.selectedStartEvent}}
+                    {{this.selectedStartEvent.operator}} · {{this.selectedStartedAt}}
+                  {{else}}—{{/if}}
+                </dd>
+                <dt>完成签核</dt>
+                <dd>
+                  {{#if this.selectedDoneEvent}}
+                    {{this.selectedDoneEvent.operator}} · {{this.selectedDoneAt}}
+                  {{else}}—{{/if}}
+                </dd>
+              </dl>
+              {{#if this.selectedSignoffLog.length}}
+                <ul class="signoff-log">
+                  {{#each this.selectedSignoffLog as |event|}}
+                    <li class="log-{{event.status}}">
+                      <span>{{event.action}}</span>
+                      <small>{{event.operator}} · {{event.time}}</small>
+                    </li>
+                  {{/each}}
+                </ul>
+              {{/if}}
+            </div>
+
             <dl>
               <dt>负责人</dt><dd>{{if this.selectedCue.owner this.selectedCue.owner "缺失"}}</dd>
               <dt>灯光</dt><dd>{{if this.selectedCue.lighting this.selectedCue.lighting "—"}}</dd>
@@ -204,12 +290,15 @@
           {{#if this.compareVersion}}
             <div class="version-summary">
               <strong>{{this.compareVersion.name}}</strong>
-              <small>{{this.compareVersion.data.title}} · {{this.versionDiff.length}} 条提示</small>
+              <small>{{this.compareVersion.data.title}} · {{this.versionDiff.length}} 条提示 · 含签核状态快照</small>
             </div>
             <div class="diff-list">
               {{#each this.versionDiff as |diff|}}
                 <div class="diff-row {{if diff.changed "is-changed"}}">
-                  <span>{{diff.label}}</span>
+                  <span>
+                    {{diff.label}}
+                    {{#if diff.statusChanged}}<em class="diff-status-tag">状态变化</em>{{/if}}
+                  </span>
                   <p>{{diff.before}}</p>
                   <p>{{diff.after}}</p>
                 </div>
@@ -217,7 +306,7 @@
             </div>
           {{/if}}
         {{else}}
-          <p class="empty-copy">尚未锁定版本。锁定后可比较当前流程与历史快照。</p>
+          <p class="empty-copy">尚未锁定版本。锁定版会保存各提示的签核状态与操作记录，便于比较跟场进展。</p>
         {{/if}}
       </section>
     </aside>
